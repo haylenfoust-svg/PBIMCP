@@ -8,53 +8,70 @@ import msal
 import requests
 import json
 import sys
+import os
 
 from config import CLIENT_ID, TENANT_ID
 
 # Power BI API 配置
 API_BASE = "https://api.powerbi.com/v1.0/myorg"
-SCOPES = ["https://analysis.windows.net/powerbi/api/.default"]
+SCOPES = ['https://analysis.windows.net/powerbi/api/.default']
 
-# 令牌缓存
-_token_cache = {}
+# 令牌缓存文件
+CACHE_FILE = os.path.join(os.path.dirname(__file__), ".token_cache.json")
+
+
+def load_cache():
+    """加载令牌缓存"""
+    cache = msal.SerializableTokenCache()
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            cache.deserialize(f.read())
+    return cache
+
+
+def save_cache(cache):
+    """保存令牌缓存"""
+    if cache.has_state_changed:
+        with open(CACHE_FILE, "w") as f:
+            f.write(cache.serialize())
 
 
 def get_access_token() -> str:
-    """通过 Device Code Flow 获取访问令牌"""
-
-    if "access_token" in _token_cache:
-        return _token_cache["access_token"]
+    """获取访问令牌（优先使用缓存）"""
+    cache = load_cache()
 
     app = msal.PublicClientApplication(
         CLIENT_ID,
-        authority=f"https://login.microsoftonline.com/{TENANT_ID}"
+        authority=f'https://login.microsoftonline.com/{TENANT_ID}',
+        token_cache=cache
     )
 
-    # 尝试从 MSAL 缓存获取
+    # 尝试从缓存获取
     accounts = app.get_accounts()
     if accounts:
         result = app.acquire_token_silent(SCOPES, account=accounts[0])
         if result and "access_token" in result:
-            _token_cache["access_token"] = result["access_token"]
+            save_cache(cache)
             return result["access_token"]
 
-    # Device Code Flow
+    # 需要交互式登录 - 使用 Device Code Flow
     flow = app.initiate_device_flow(scopes=SCOPES)
     if "user_code" not in flow:
         raise Exception(f"无法创建设备流: {flow.get('error_description', 'Unknown error')}")
 
-    # 打印登录提示
+    # 输出登录提示到 stderr（这样 MCP 协议不会被干扰）
     print("\n" + "=" * 60, file=sys.stderr)
     print("Power BI 授权登录", file=sys.stderr)
     print("=" * 60, file=sys.stderr)
     print(f"请在浏览器中打开: {flow['verification_uri']}", file=sys.stderr)
     print(f"输入代码: {flow['user_code']}", file=sys.stderr)
     print("=" * 60 + "\n", file=sys.stderr)
+    sys.stderr.flush()
 
     result = app.acquire_token_by_device_flow(flow)
 
     if "access_token" in result:
-        _token_cache["access_token"] = result["access_token"]
+        save_cache(cache)
         return result["access_token"]
     else:
         raise Exception(f"认证失败: {result.get('error_description', 'Unknown error')}")
@@ -87,7 +104,7 @@ def api_post(endpoint: str, data: dict = None) -> dict:
 
 
 # ============================================================
-# MCP 工具定义
+# MCP 工具实现
 # ============================================================
 
 def list_workspaces() -> str:
@@ -276,7 +293,15 @@ def get_overview() -> str:
             ws_reports = api_get(f"/groups/{ws['id']}/reports").get("value", [])
 
             output += f"- 数据集: {len(ws_datasets)} 个\n"
-            output += f"- 报表: {len(ws_reports)} 个\n\n"
+            if ws_datasets:
+                for ds in ws_datasets:
+                    output += f"  - {ds['name']} (`{ds['id']}`)\n"
+
+            output += f"- 报表: {len(ws_reports)} 个\n"
+            if ws_reports:
+                for rpt in ws_reports:
+                    output += f"  - {rpt['name']} (`{rpt['id']}`)\n"
+            output += "\n"
 
     return output
 
