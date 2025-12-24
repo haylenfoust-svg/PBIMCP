@@ -16,8 +16,8 @@ from config import CLIENT_ID, TENANT_ID
 API_BASE = "https://api.powerbi.com/v1.0/myorg"
 SCOPES = ['https://analysis.windows.net/powerbi/api/.default']
 
-# 令牌缓存文件
-CACHE_FILE = os.path.join(os.path.dirname(__file__), ".token_cache.json")
+# 令牌缓存文件 - 使用绝对路径确保在任何工作目录下都能找到
+CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".token_cache.json")
 
 
 def load_cache():
